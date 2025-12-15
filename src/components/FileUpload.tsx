@@ -1,5 +1,5 @@
 import { useRef, useState, DragEvent } from "react";
-import { FileText, Upload, X, Loader2, CloudUpload } from "lucide-react";
+import { FileText, Upload, X, Loader2, CloudUpload, Image } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/hooks/use-toast";
 import * as pdfjsLib from "pdfjs-dist";
@@ -9,7 +9,7 @@ import mammoth from "mammoth";
 pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.js`;
 
 interface FileUploadProps {
-  onFileContent: (content: string, fileName: string) => void;
+  onFileContent: (content: string, fileName: string, isImage?: boolean, imageBase64?: string) => void;
   uploadedFile: string | null;
   onClearFile: () => void;
 }
@@ -46,18 +46,47 @@ export function FileUpload({ onFileContent, uploadedFile, onClearFile }: FileUpl
     return result.value.trim();
   };
 
+  const convertImageToBase64 = async (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        resolve(result);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  };
+
   const processFile = async (file: File) => {
-    const validTypes = [
+    const documentTypes = [
       "application/pdf",
       "application/msword",
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       "text/plain",
     ];
 
-    if (!validTypes.includes(file.type) && !file.name.endsWith(".txt")) {
+    const imageTypes = ["image/jpeg", "image/jpg", "image/png"];
+    const isImage = imageTypes.includes(file.type) || 
+                    file.name.toLowerCase().endsWith('.jpg') || 
+                    file.name.toLowerCase().endsWith('.jpeg') || 
+                    file.name.toLowerCase().endsWith('.png');
+    const isDocument = documentTypes.includes(file.type) || file.name.endsWith(".txt");
+
+    if (!isDocument && !isImage) {
       toast({
         title: "Invalid file type",
-        description: "Please upload a PDF, Word document, or text file.",
+        description: "Please upload a PDF, Word document, text file, or image (JPG/PNG).",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Check file size (max 10MB)
+    if (file.size > 10 * 1024 * 1024) {
+      toast({
+        title: "File too large",
+        description: "Please upload a file smaller than 10MB.",
         variant: "destructive",
       });
       return;
@@ -66,33 +95,43 @@ export function FileUpload({ onFileContent, uploadedFile, onClearFile }: FileUpl
     setIsProcessing(true);
 
     try {
-      let text = "";
-
-      if (file.type === "text/plain" || file.name.endsWith(".txt")) {
-        text = await file.text();
-      } else if (file.type === "application/pdf" || file.name.endsWith(".pdf")) {
-        text = await extractTextFromPDF(file);
-      } else if (
-        file.type === "application/msword" ||
-        file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
-        file.name.endsWith(".doc") ||
-        file.name.endsWith(".docx")
-      ) {
-        text = await extractTextFromWord(file);
-      }
-
-      if (text.trim()) {
-        onFileContent(text, file.name);
+      if (isImage) {
+        // Convert image to base64 for AI OCR processing
+        const base64 = await convertImageToBase64(file);
+        onFileContent("", file.name, true, base64);
         toast({
-          title: "File loaded",
-          description: `Extracted ${text.split(/\s+/).filter(Boolean).length} words from ${file.name}`,
+          title: "Image loaded",
+          description: `${file.name} ready for AI text extraction`,
         });
       } else {
-        toast({
-          title: "No text found",
-          description: "Could not extract text from this file. Try a different file.",
-          variant: "destructive",
-        });
+        let text = "";
+
+        if (file.type === "text/plain" || file.name.endsWith(".txt")) {
+          text = await file.text();
+        } else if (file.type === "application/pdf" || file.name.endsWith(".pdf")) {
+          text = await extractTextFromPDF(file);
+        } else if (
+          file.type === "application/msword" ||
+          file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+          file.name.endsWith(".doc") ||
+          file.name.endsWith(".docx")
+        ) {
+          text = await extractTextFromWord(file);
+        }
+
+        if (text.trim()) {
+          onFileContent(text, file.name);
+          toast({
+            title: "File loaded",
+            description: `Extracted ${text.split(/\s+/).filter(Boolean).length} words from ${file.name}`,
+          });
+        } else {
+          toast({
+            title: "No text found",
+            description: "Could not extract text from this file. Try a different file.",
+            variant: "destructive",
+          });
+        }
       }
     } catch (error) {
       console.error("Error processing file:", error);
@@ -134,27 +173,33 @@ export function FileUpload({ onFileContent, uploadedFile, onClearFile }: FileUpl
     }
   };
 
+  const isImageFile = uploadedFile?.toLowerCase().match(/\.(jpg|jpeg|png)$/);
+
   return (
     <div className="flex items-center gap-2">
       <input
         ref={inputRef}
         type="file"
-        accept=".pdf,.doc,.docx,.txt"
+        accept=".pdf,.doc,.docx,.txt,.jpg,.jpeg,.png,image/jpeg,image/png"
         onChange={handleFileChange}
         className="hidden"
         disabled={isProcessing}
       />
       
       {uploadedFile ? (
-        <div className="flex items-center gap-2 px-3 py-1.5 bg-secondary rounded-lg text-sm">
-          <FileText className="w-4 h-4 text-primary" />
-          <span className="text-secondary-foreground max-w-[120px] truncate">
+        <div className="flex items-center gap-2 px-2 sm:px-3 py-1.5 bg-secondary rounded-lg text-xs sm:text-sm">
+          {isImageFile ? (
+            <Image className="w-4 h-4 text-primary flex-shrink-0" />
+          ) : (
+            <FileText className="w-4 h-4 text-primary flex-shrink-0" />
+          )}
+          <span className="text-secondary-foreground max-w-[80px] sm:max-w-[120px] truncate">
             {uploadedFile}
           </span>
           <Button
             variant="ghost"
             size="icon"
-            className="h-5 w-5 hover:bg-destructive/10"
+            className="h-5 w-5 hover:bg-destructive/10 flex-shrink-0"
             onClick={onClearFile}
           >
             <X className="w-3 h-3" />
@@ -171,24 +216,24 @@ export function FileUpload({ onFileContent, uploadedFile, onClearFile }: FileUpl
             size="sm"
             onClick={handleClick}
             disabled={isProcessing}
-            className={`gap-2 text-muted-foreground hover:text-foreground transition-all ${
+            className={`gap-1.5 sm:gap-2 text-muted-foreground hover:text-foreground transition-all text-xs sm:text-sm px-2 sm:px-3 ${
               isDragging ? "border-primary bg-primary/5 text-primary" : ""
             }`}
           >
             {isProcessing ? (
               <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                <span className="hidden sm:inline">Processing...</span>
+                <Loader2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 animate-spin" />
+                <span className="hidden xs:inline sm:inline">Processing...</span>
               </>
             ) : isDragging ? (
               <>
-                <CloudUpload className="w-4 h-4" />
-                <span className="hidden sm:inline">Drop here</span>
+                <CloudUpload className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                <span className="hidden xs:inline sm:inline">Drop here</span>
               </>
             ) : (
               <>
-                <Upload className="w-4 h-4" />
-                <span className="hidden sm:inline">Upload File</span>
+                <Upload className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                <span className="hidden xs:inline sm:inline">Upload</span>
               </>
             )}
           </Button>
