@@ -11,11 +11,12 @@ serve(async (req) => {
   }
 
   try {
-    const { jobDescription } = await req.json();
+    const { jobDescription, imageBase64 } = await req.json();
     
-    if (!jobDescription || typeof jobDescription !== 'string') {
+    // Either text or image must be provided
+    if (!jobDescription && !imageBase64) {
       return new Response(
-        JSON.stringify({ error: 'Job description is required' }),
+        JSON.stringify({ error: 'Job description text or image is required' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -29,7 +30,7 @@ serve(async (req) => {
       );
     }
 
-    console.log('Extracting keywords from job description, length:', jobDescription.length);
+    console.log('Extracting keywords, hasImage:', !!imageBase64, 'textLength:', jobDescription?.length || 0);
 
     const systemPrompt = `You are an expert HR keyword extraction assistant. Analyze the job description and extract keywords into exactly 5 categories. Return ONLY a valid JSON object with no additional text or markdown.
 
@@ -55,6 +56,36 @@ Rules:
 - Remove duplicates
 - Return empty arrays if no keywords found for a category`;
 
+    // Build request based on whether we have an image
+    let messages: any[];
+    
+    if (imageBase64) {
+      // Use vision model for image OCR + extraction
+      messages = [
+        { role: 'system', content: systemPrompt },
+        { 
+          role: 'user', 
+          content: [
+            { 
+              type: 'text', 
+              text: jobDescription 
+                ? `First, extract all text from this job description image. Then, extract keywords from the combined text content below and from the image:\n\n${jobDescription}`
+                : 'Extract all text from this job description image. Then analyze it and extract keywords into the required categories.'
+            },
+            { 
+              type: 'image_url', 
+              image_url: { url: imageBase64 }
+            }
+          ]
+        }
+      ];
+    } else {
+      messages = [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: `Extract keywords from this job description:\n\n${jobDescription}` }
+      ];
+    }
+
     const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -62,11 +93,8 @@ Rules:
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'google/gemini-2.5-flash',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: `Extract keywords from this job description:\n\n${jobDescription}` }
-        ],
+        model: imageBase64 ? 'google/gemini-2.5-flash' : 'google/gemini-2.5-flash',
+        messages,
       }),
     });
 
